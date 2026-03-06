@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Mello — WhatsApp Agent Dashboard</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'DM Sans', sans-serif; background: #0d0d10; color: #e0e0ea; min-height: 100vh; }
+
+    header {
+      padding: 28px 40px;
+      border-bottom: 1px solid #1e1e28;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .logo { display: flex; align-items: center; gap: 12px; }
+    .logo-icon {
+      width: 40px; height: 40px; border-radius: 12px;
+      background: linear-gradient(135deg, #7c5cff, #c45cff);
+      display: flex; align-items: center; justify-content: center; font-size: 1.2rem;
+    }
+    .logo-text { font-size: 1.1rem; font-weight: 600; color: #fff; }
+    .logo-sub  { font-size: 0.75rem; color: #666; margin-top: 1px; }
+    .status-dot {
+      width: 8px; height: 8px; border-radius: 50%; background: #22c55e;
+      box-shadow: 0 0 8px #22c55e; display: inline-block; margin-right: 8px;
+    }
+    .status-live { font-size: 0.8rem; color: #22c55e; font-weight: 500; }
+
+    main { padding: 36px 40px; display: flex; flex-direction: column; gap: 28px; }
+
+    /* Stats row */
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; }
+    .stat-card {
+      background: #13131a; border: 1px solid #1e1e2e; border-radius: 14px; padding: 20px;
+    }
+    .stat-label { font-size: 0.72rem; color: #555; text-transform: uppercase; letter-spacing: 0.8px; font-weight: 500; }
+    .stat-value { font-size: 1.8rem; font-weight: 600; color: #fff; margin-top: 8px; }
+    .stat-value.green { color: #22c55e; }
+    .stat-value.purple { color: #a78bfa; }
+
+    /* Setup guide */
+    .section-title {
+      font-size: 0.72rem; text-transform: uppercase; letter-spacing: 1px;
+      color: #555; font-weight: 500; margin-bottom: 14px;
+    }
+    .guide-steps { display: flex; flex-direction: column; gap: 10px; }
+    .step {
+      background: #13131a; border: 1px solid #1e1e2e; border-radius: 12px;
+      padding: 16px 18px; display: flex; align-items: flex-start; gap: 14px;
+    }
+    .step-num {
+      width: 26px; height: 26px; border-radius: 8px; background: #1e1e2e;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.75rem; font-weight: 600; color: #7c5cff; flex-shrink: 0;
+    }
+    .step-num.done { background: #14291e; color: #22c55e; }
+    .step-title { font-size: 0.9rem; font-weight: 500; color: #e0e0ea; }
+    .step-desc  { font-size: 0.8rem; color: #666; margin-top: 3px; line-height: 1.5; }
+    .code-inline {
+      font-family: 'DM Mono', monospace; font-size: 0.8rem;
+      background: #1e1e2e; color: #a78bfa; padding: 1px 7px;
+      border-radius: 5px;
+    }
+
+    /* Webhook URL box */
+    .webhook-box {
+      background: #13131a; border: 1px solid #2a2a3e; border-radius: 12px; padding: 18px;
+    }
+    .webhook-url {
+      font-family: 'DM Mono', monospace; font-size: 0.85rem; color: #a78bfa;
+      word-break: break-all; margin-top: 10px;
+    }
+    .copy-btn {
+      margin-top: 10px; padding: 7px 16px; background: #1e1e2e; border: 1px solid #2a2a3e;
+      border-radius: 8px; color: #a78bfa; font-size: 0.8rem; cursor: pointer;
+      font-family: 'DM Sans', sans-serif; font-weight: 500;
+    }
+    .copy-btn:hover { background: #2a2a3e; }
+
+    /* Conversations */
+    .conv-list { display: flex; flex-direction: column; gap: 8px; }
+    .conv-card {
+      background: #13131a; border: 1px solid #1e1e2e; border-radius: 12px; padding: 16px 18px;
+      display: flex; align-items: center; justify-content: space-between;
+      cursor: pointer; transition: border-color 0.15s;
+    }
+    .conv-card:hover { border-color: #7c5cff44; }
+    .conv-phone { font-family: 'DM Mono', monospace; font-size: 0.85rem; color: #a78bfa; }
+    .conv-preview { font-size: 0.8rem; color: #666; margin-top: 3px; max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .conv-count { font-size: 0.75rem; color: #555; background: #1e1e2e; padding: 3px 10px; border-radius: 20px; }
+    .empty-convs { text-align: center; padding: 32px; color: #444; font-size: 0.9rem; }
+
+    /* Test panel */
+    .test-panel {
+      background: #13131a; border: 1px solid #1e1e2e; border-radius: 14px; padding: 22px;
+    }
+    .test-row { display: flex; gap: 10px; margin-top: 14px; }
+    input[type=text] {
+      flex: 1; background: #0d0d10; border: 1px solid #2a2a3e; border-radius: 10px;
+      padding: 11px 14px; color: #e0e0ea; font-size: 0.88rem; outline: none;
+      font-family: 'DM Sans', sans-serif;
+    }
+    input[type=text]:focus { border-color: #7c5cff; }
+    .send-btn {
+      padding: 11px 22px; background: #7c5cff; border: none; border-radius: 10px;
+      color: white; font-size: 0.88rem; font-weight: 600; cursor: pointer;
+      font-family: 'DM Sans', sans-serif; transition: background 0.15s;
+    }
+    .send-btn:hover { background: #9174ff; }
+    .send-btn:disabled { background: #3a3a52; cursor: not-allowed; }
+    .test-response {
+      margin-top: 14px; padding: 14px; background: #0d0d10; border: 1px solid #1e1e2e;
+      border-radius: 10px; font-size: 0.88rem; line-height: 1.6; color: #c0c0d0;
+      min-height: 60px; white-space: pre-wrap; display: none;
+    }
+
+    .refresh-btn {
+      padding: 6px 14px; background: transparent; border: 1px solid #2a2a3e;
+      border-radius: 8px; color: #666; font-size: 0.78rem; cursor: pointer;
+      font-family: 'DM Sans', sans-serif; margin-left: auto; display: block;
+    }
+    .refresh-btn:hover { border-color: #7c5cff; color: #a78bfa; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">🌿</div>
+    <div>
+      <div class="logo-text">Mello</div>
+      <div class="logo-sub">WhatsApp Agent Dashboard</div>
+    </div>
+  </div>
+  <div>
+    <span class="status-dot"></span>
+    <span class="status-live">Server Running</span>
+  </div>
+</header>
+
+<main>
+
+  <!-- Stats -->
+  <div class="stats" id="stats">
+    <div class="stat-card">
+      <div class="stat-label">Active Conversations</div>
+      <div class="stat-value purple" id="stat-convs">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">WhatsApp</div>
+      <div class="stat-value" id="stat-wa">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">azure AI</div>
+      <div class="stat-value" id="stat-azure">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Webhook Token</div>
+      <div class="stat-value" style="font-size:0.85rem;font-family:'DM Mono',monospace;color:#a78bfa;margin-top:12px" id="stat-token">—</div>
+    </div>
+  </div>
+
+  <!-- Webhook URL -->
+  <div>
+    <div class="section-title">Your Webhook URL (paste into Meta Developer Console)</div>
+    <div class="webhook-box">
+      <div style="font-size:0.8rem;color:#666">Set this as your WhatsApp webhook URL in Meta → your app → WhatsApp → Configuration</div>
+      <div class="webhook-url" id="webhook-url">http://localhost:8000/webhook</div>
+      <button class="copy-btn" onclick="copyWebhook()">Copy URL</button>
+    </div>
+  </div>
+
+  <!-- Setup guide -->
+  <div>
+    <div class="section-title">Setup Checklist</div>
+    <div class="guide-steps">
+      <div class="step">
+        <div class="step-num done">1</div>
+        <div>
+          <div class="step-title">Server is running ✓</div>
+          <div class="step-desc">FastAPI server started on port 8000</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>
+          <div class="step-title">Expose with ngrok</div>
+          <div class="step-desc">Run <span class="code-inline">ngrok http 8000</span> in a new terminal. Copy the <span class="code-inline">https://xxxx.ngrok.io</span> URL.</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>
+          <div class="step-title">Configure Meta Webhook</div>
+          <div class="step-desc">Go to Meta Developer Console → your app → WhatsApp → Configuration → set Callback URL to <span class="code-inline">https://xxxx.ngrok.io/webhook</span> and Verify Token to <span class="code-inline" id="token-display">loading...</span></div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div>
+          <div class="step-title">Subscribe to messages webhook</div>
+          <div class="step-desc">In Meta Console → Webhook Fields → subscribe to <span class="code-inline">messages</span></div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">5</div>
+        <div>
+          <div class="step-title">Add your phone as test recipient</div>
+          <div class="step-desc">Meta Developer Console → WhatsApp → API Setup → add your phone number as recipient. Then send a message to your test WhatsApp number.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Test without WhatsApp -->
+  <div>
+    <div class="section-title">Test Mello AI (without WhatsApp)</div>
+    <div class="test-panel">
+      <div style="font-size:0.85rem;color:#888">Send a message directly to Mello's AI — useful for testing the personality and responses before WhatsApp is configured.</div>
+      <div class="test-row">
+        <input type="text" id="test-input" placeholder="Yaar bahut stress ho raha hai aaj..." />
+        <button class="send-btn" id="test-btn" onclick="testMello()">Send</button>
+      </div>
+      <div class="test-response" id="test-response"></div>
+    </div>
+  </div>
+
+  <!-- Active conversations -->
+  <div>
+    <div style="display:flex;align-items:center;margin-bottom:14px">
+      <div class="section-title" style="margin-bottom:0">Active Conversations</div>
+      <button class="refresh-btn" onclick="loadConversations()">↻ Refresh</button>
+    </div>
+    <div class="conv-list" id="conv-list">
+      <div class="empty-convs">No conversations yet — send a WhatsApp message to start</div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+  // Load health stats
+  async function loadHealth() {
+    try {
+      const r = await fetch('/health');
+      const d = await r.json();
+      document.getElementById('stat-convs').textContent  = d.active_conversations;
+      document.getElementById('stat-wa').textContent     = d.whatsapp_configured ? '✓ Ready' : '✗ Not set';
+      document.getElementById('stat-wa').style.color     = d.whatsapp_configured ? '#22c55e' : '#f87171';
+      document.getElementById('stat-azure').textContent = d.azure_configured ? '✓ Ready' : '✗ Not set';
+      document.getElementById('stat-azure').style.color = d.azure_configured ? '#22c55e' : '#f87171';
+    } catch(e) {}
+  }
+
+  // Load conversations
+  async function loadConversations() {
+    try {
+      const r = await fetch('/conversations');
+      const d = await r.json();
+      const list = document.getElementById('conv-list');
+      const entries = Object.entries(d);
+      if (!entries.length) {
+        list.innerHTML = '<div class="empty-convs">No conversations yet — send a WhatsApp message to start</div>';
+        return;
+      }
+      list.innerHTML = entries.map(([phone, data]) => `
+        <div class="conv-card">
+          <div>
+            <div class="conv-phone">${phone}</div>
+            <div class="conv-preview">${data.last_message || ''}</div>
+          </div>
+          <div class="conv-count">${data.message_count} messages</div>
+        </div>
+      `).join('');
+    } catch(e) {}
+  }
+
+  // Load verify token
+  async function loadToken() {
+    try {
+      const r  = await fetch('/health');
+      // Token comes from env — show it from the stat
+    } catch(e) {}
+    // Read from meta tag or just show env default
+    const token = 'mello_verify_123'; // matches default in server.py
+    document.getElementById('stat-token').textContent  = token;
+    document.getElementById('token-display').textContent = token;
+  }
+
+  function copyWebhook() {
+    const url = document.getElementById('webhook-url').textContent;
+    navigator.clipboard.writeText(url + '');
+    const btn = document.querySelector('.copy-btn');
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy URL', 2000);
+  }
+
+  // Test Mello directly
+  async function testMello() {
+    const input = document.getElementById('test-input');
+    const btn   = document.getElementById('test-btn');
+    const resp  = document.getElementById('test-response');
+    const text  = input.value.trim();
+    if (!text) return;
+
+    btn.disabled = true;
+    btn.textContent = 'Thinking…';
+    resp.style.display = 'block';
+    resp.textContent = '…';
+
+    try {
+      const r = await fetch('/test-message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text, phone: 'dashboard_test' }),
+      });
+      const d = await r.json();
+      resp.textContent = d.reply;
+      input.value = '';
+      loadConversations();
+    } catch(e) {
+      resp.textContent = 'Error: ' + e.message;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Send';
+    }
+  }
+
+  document.getElementById('test-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') testMello();
+  });
+
+  // Update webhook URL with current host
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  document.getElementById('webhook-url').textContent = location.origin + '/webhook';
+
+  loadHealth();
+  loadToken();
+  loadConversations();
+  setInterval(loadHealth, 10000);
+  setInterval(loadConversations, 15000);
+</script>
+</body>
+</html>

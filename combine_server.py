@@ -28,6 +28,7 @@ from fractions import Fraction
 from dotenv import load_dotenv
 
 import httpx
+import interventions
 from openai import AsyncAzureOpenAI
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import PlainTextResponse, HTMLResponse
@@ -439,16 +440,19 @@ class HumeAudioTrack(MediaStreamTrack):
         import av
         import time
 
-        # Initialize start time on first call (for real-time pacing)
-        if self._start is None:
-            self._start = time.time()
+        # REAL-TIME PACING: Sleep FIRST to maintain 20ms intervals
+        # Only pace AFTER first frame (when _start is set)
+        if self._start is not None:
+            target_time = self._start + (self._timestamp / self.SAMPLE_RATE)
+            wait = target_time - time.time()
+            if wait > 0:
+                await asyncio.sleep(wait)
 
-        # Drain queue into buffer (non-blocking after first attempt)
+        # Drain queue into buffer (non-blocking check for available data)
         while True:
             try:
-                # First iteration: wait up to 20ms for data
-                # Subsequent: non-blocking check for more data
-                timeout = 0.02 if len(self._buffer) < self.CHUNK_BYTES else 0.0
+                # Quick check for data - don't wait long as we've already paced above
+                timeout = 0.005 if len(self._buffer) < self.CHUNK_BYTES else 0.0
                 audio_data = await asyncio.wait_for(self._queue.get(), timeout=timeout)
 
                 # Decode WAV and add to buffer
@@ -476,15 +480,14 @@ class HumeAudioTrack(MediaStreamTrack):
         frame.sample_rate = self.SAMPLE_RATE
         frame.pts = self._timestamp
         frame.time_base = Fraction(1, self.SAMPLE_RATE)
+
+        # Increment timestamp for next frame's scheduling
         self._timestamp += self.CHUNK_SAMPLES
 
-        # REAL-TIME PACING: Sleep to maintain 20ms per chunk timing
-        # This prevents audio from playing faster than real-time
-        elapsed = time.time() - self._start
-        target_time = self._timestamp / self.SAMPLE_RATE
-        wait = target_time - elapsed
-        if wait > 0:
-            await asyncio.sleep(wait)
+        # Set _start AFTER first frame is ready (not before buffer drain)
+        # This ensures pacing is relative to when we actually started outputting
+        if self._start is None:
+            self._start = time.time()
 
         return frame
 
@@ -622,6 +625,7 @@ async def bridge_audio(call_id: str, user_track, hume_ws, hume_audio_out: HumeAu
     import numpy as np
 
     frame_count = 0
+    intervention_state = interventions.get_initial_state()
 
     async def send_user_audio():
         nonlocal frame_count
@@ -678,7 +682,20 @@ async def bridge_audio(call_id: str, user_track, hume_ws, hume_audio_out: HumeAu
                         audio_bytes = base64.b64decode(data.get("data", ""))
                         await hume_audio_out._queue.put(audio_bytes)
                     elif t == "user_message":
-                        log.info(f"[{call_id}] User: {data.get('message',{}).get('content','')}")
+                        transcript = data.get('message', {}).get('content', '')
+                        log.info(f"[{call_id}] User: {transcript}")
+
+                        # Check for intervention
+                        intervention = interventions.detect_intervention(data, intervention_state)
+                        if intervention:
+                            log.info(f"[{call_id}] INTERVENTION: {intervention['type']} (priority={intervention['priority']})")
+                            # Inject guidance via variables (matches Hume config's {{intervention_guidance}})
+                            await hume_ws.send_str(json.dumps({
+                                "type": "session_settings",
+                                "variables": {
+                                    "intervention_guidance": intervention['guidance']
+                                }
+                            }))
                     elif t == "assistant_message":
                         log.info(f"[{call_id}] Mello: {data.get('message',{}).get('content','')}")
                     elif t == "error":
@@ -806,10 +823,13 @@ async def handle_incoming_call(call_id: str, from_phone: str, sdp_offer: str):
             "channels": 1,
             "encoding": "linear16",
             "sample_rate": 48000
+        },
+        "variables": {
+            "intervention_guidance": ""  # Empty initially, set when intervention detected
         }
     }
     await hume_ws.send_str(json.dumps(session_settings))
-    log.info(f"[{call_id}] Sent session_settings to Hume: 48kHz mono linear16")
+    log.info(f"[{call_id}] Sent session_settings to Hume: 48kHz mono linear16 + intervention_guidance var")
 
     log_call_event(call_id, "CALL_HUME_CONNECTED")
     active_calls[call_id].update({"hume_ws": hume_ws, "hume_session": session})

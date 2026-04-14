@@ -20,7 +20,7 @@ Fill in `.env`:
 
 ### 3. Run the server
 ```bash
-python server.py
+python combine_server.py
 ```
 Open → http://localhost:8000 — you can test Mello AI from the dashboard
 immediately, even before WhatsApp is configured.

@@ -66,7 +66,7 @@ Your Android WhatsApp
        ↓  (sends message)
 Meta WhatsApp Cloud API
        ↓  (POST webhook)
-server.py  /webhook endpoint
+combine_server.py  /webhook endpoint
        ↓
 Claude AI (Mello persona)
        ↓
@@ -78,7 +78,7 @@ Your Android WhatsApp  ✓
 ## File structure
 ```
 whatsapp-mello/
-├── server.py          — Main FastAPI server + webhook handler
+├── combine_server.py          — Main FastAPI server + webhook handler
 ├── requirements.txt
 ├── .env.example       — Copy to .env and fill in
 ├── logs/

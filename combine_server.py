@@ -620,12 +620,18 @@ def sanitize_sdp_for_whatsapp(sdp: str) -> str:
 
 
 async def bridge_audio(call_id: str, user_track, hume_ws, hume_audio_out: HumeAudioTrack):
-    """Bridge audio between WhatsApp WebRTC track (48kHz stereo) ↔ Hume EVI WebSocket (48kHz mono)."""
+    """Bridge audio between WhatsApp WebRTC track (48kHz stereo) ↔ Hume EVI WebSocket (16kHz mono)."""
     import base64
+    import av
     import numpy as np
 
     frame_count = 0
     intervention_state = interventions.get_initial_state()
+
+    # Hume's ASR runs at 16kHz internally. Sending 48kHz triples upstream bytes
+    # and adds a resample step on their side. Downsample here with a stateful
+    # polyphase resampler so filter state carries across frames.
+    upstream_resampler = av.AudioResampler(format="s16", layout="mono", rate=16000)
 
     async def send_user_audio():
         nonlocal frame_count
@@ -638,36 +644,27 @@ async def bridge_audio(call_id: str, user_track, hume_ws, hume_audio_out: HumeAu
                 if frame_count == 1:
                     log.info(f"[{call_id}] AUDIO_IN format={frame.format.name} layout={frame.layout.name} rate={frame.sample_rate} samples={frame.samples}")
 
-                # Use to_ndarray() for reliable audio extraction
-                audio_array = frame.to_ndarray()  # Shape: (channels, samples) for planar, (1, samples*channels) for packed
+                # Resample + mono-downmix in one pass via pyav's swresample.
+                resampled_frames = upstream_resampler.resample(frame)
+                if not resampled_frames:
+                    continue
+
+                chunks = bytearray()
+                for rf in resampled_frames:
+                    arr = rf.to_ndarray()
+                    if arr.dtype != np.int16:
+                        arr = arr.astype(np.int16)
+                    chunks.extend(arr.tobytes())
+
+                if not chunks:
+                    continue
 
                 if frame_count == 1:
-                    log.info(f"[{call_id}] AUDIO_ARRAY shape={audio_array.shape} dtype={audio_array.dtype}")
-
-                # Convert to mono by averaging channels if stereo
-                if audio_array.shape[0] == 2:  # Stereo (planar: 2 channels)
-                    mono_array = ((audio_array[0].astype(np.int32) + audio_array[1].astype(np.int32)) // 2).astype(np.int16)
-                elif len(audio_array.shape) == 2 and audio_array.shape[0] == 1:
-                    # Packed stereo: reshape and average
-                    samples = audio_array[0]
-                    if frame.layout.name == "stereo":
-                        # Interleaved: [L0, R0, L1, R1, ...]
-                        left = samples[0::2]
-                        right = samples[1::2]
-                        mono_array = ((left.astype(np.int32) + right.astype(np.int32)) // 2).astype(np.int16)
-                    else:
-                        mono_array = samples.astype(np.int16)
-                else:
-                    mono_array = audio_array.flatten().astype(np.int16)
-
-                audio_bytes = mono_array.tobytes()
-
-                if frame_count == 1:
-                    log.info(f"[{call_id}] AUDIO_OUT_TO_HUME len={len(audio_bytes)} samples={len(audio_bytes)//2}")
+                    log.info(f"[{call_id}] AUDIO_OUT_TO_HUME 16kHz mono len={len(chunks)} samples={len(chunks)//2}")
 
                 await hume_ws.send_str(json.dumps({
                     "type": "audio_input",
-                    "data": base64.b64encode(audio_bytes).decode(),
+                    "data": base64.b64encode(bytes(chunks)).decode(),
                 }))
         except Exception as e:
             log.debug(f"[{call_id}] send_user_audio ended: {e}")
@@ -707,11 +704,43 @@ async def bridge_audio(call_id: str, user_track, hume_ws, hume_audio_out: HumeAu
     log_call_event(call_id, "CALL_STOP", "audio bridge ended")
 
 
+async def connect_hume(call_id: str):
+    """Open the Hume EVI WebSocket and send initial session_settings.
+
+    Returns (hume_ws, aiohttp_session). Runs in parallel with SDP negotiation
+    so the first-audio latency isn't paid serially on every call.
+    """
+    config_param = f"&config_id={HUME_CONFIG_ID}" if HUME_CONFIG_ID else ""
+    hume_url = f"wss://api.hume.ai/v0/evi/chat?api_key={HUME_API_KEY}{config_param}"
+
+    session = aiohttp.ClientSession()
+    hume_ws = await session.ws_connect(hume_url)
+    log.info(f"[{call_id}] Connected to Hume EVI ✓")
+
+    session_settings = {
+        "type": "session_settings",
+        "audio": {
+            "channels": 1,
+            "encoding": "linear16",
+            "sample_rate": 16000,
+        },
+        "variables": {"intervention_guidance": ""},
+    }
+    await hume_ws.send_str(json.dumps(session_settings))
+    log.info(f"[{call_id}] Sent session_settings to Hume: 16kHz mono linear16 + intervention_guidance var")
+    log_call_event(call_id, "CALL_HUME_CONNECTED")
+    return hume_ws, session
+
+
 async def handle_incoming_call(call_id: str, from_phone: str, sdp_offer: str):
     log_call_event(call_id, "USER_TRY_CALL", f"from={from_phone}")
 
     # Log SDP offer for debugging
     log.info(f"[{call_id}] SDP OFFER (first 300 chars): {sdp_offer[:300]}")
+
+    # Kick off Hume connect in parallel with SDP negotiation — saves 500ms–2s
+    # of serialized latency per call before the user hears the first audio.
+    hume_connect_task = asyncio.create_task(connect_hume(call_id))
 
     # 1. Create WebRTC peer connection with STUN servers (CRITICAL for NAT traversal)
     ice_config = RTCConfiguration(
@@ -802,36 +831,15 @@ async def handle_incoming_call(call_id: str, from_phone: str, sdp_offer: str):
 
     log_call_event(call_id, "CALL_INITIATED", f"from={from_phone}")
 
-    # 6. Wait for audio track then connect Hume EVI
-    for _ in range(20):
+    # 6. Await the Hume connection we started in parallel at the top.
+    hume_ws, session = await hume_connect_task
+
+    # 7. Wait for audio track (finer 50ms polling, up to 3s).
+    for _ in range(60):
         if user_track_holder["track"]:
             break
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.05)
 
-    config_param = f"&config_id={HUME_CONFIG_ID}" if HUME_CONFIG_ID else ""
-    hume_url = f"wss://api.hume.ai/v0/evi/chat?api_key={HUME_API_KEY}{config_param}"
-
-    session = aiohttp.ClientSession()
-    hume_ws = await session.ws_connect(hume_url)
-    log.info(f"[{call_id}] Connected to Hume EVI ✓")
-
-    # CRITICAL: Send session_settings to tell Hume our audio format
-    # WhatsApp sends 48kHz stereo, we convert to mono and send at 48kHz
-    session_settings = {
-        "type": "session_settings",
-        "audio": {
-            "channels": 1,
-            "encoding": "linear16",
-            "sample_rate": 48000
-        },
-        "variables": {
-            "intervention_guidance": ""  # Empty initially, set when intervention detected
-        }
-    }
-    await hume_ws.send_str(json.dumps(session_settings))
-    log.info(f"[{call_id}] Sent session_settings to Hume: 48kHz mono linear16 + intervention_guidance var")
-
-    log_call_event(call_id, "CALL_HUME_CONNECTED")
     active_calls[call_id].update({"hume_ws": hume_ws, "hume_session": session})
 
     if user_track_holder["track"]:
